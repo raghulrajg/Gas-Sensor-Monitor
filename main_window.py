@@ -226,6 +226,17 @@ class MainWindow(QMainWindow):
         self.connect_btn.setText("Disconnect")
         self._set_connection_controls_enabled(False)
 
+        # Give the device a moment to finish booting/enumerating (classic
+        # Arduino boards reset on serial open) before asking it for its
+        # current calibration, then pre-fill the sliders from the reply
+        # instead of leaving them at the app's defaults.
+        QTimer.singleShot(2000, self._request_settings_after_connect)
+
+    def _request_settings_after_connect(self):
+        if self.connected and self.worker is not None:
+            self.worker.send_raw(config.REQUEST_SETTINGS_CMD)
+            self.statusBar().showMessage("Fetching current calibration from device...", 3000)
+
     def _on_connection_failed(self, message: str):
         # The serial port never actually opened - revert the optimistic
         # "Connected" UI state we set in _connect() instead of leaving the
@@ -428,7 +439,7 @@ class MainWindow(QMainWindow):
         dlg = ThemeDialog(self.theme, self._apply_theme, self)
         dlg.exec()
 
-    def _apply_theme(self, background: str, text: str, card: str):
+    def _apply_theme(self, background: str, text: str, card: str, line_colors: dict = None):
         # Look up a matching border color from the presets when this exact
         # combination came from a preset; otherwise derive a neutral one
         # from the card color so custom themes still get a visible divider.
@@ -470,7 +481,13 @@ class MainWindow(QMainWindow):
         # pyqtgraph draws its own axes/labels/grid (not QSS-driven), so it
         # needs to be re-colored explicitly on every theme change.
         for sw in getattr(self, "sensor_widgets", {}).values():
-            sw.apply_theme(text)
+            sw.apply_theme(text, card)
+
+        # If the caller (e.g. picking a named color scheme) also supplied
+        # a matching set of line colors, apply those too.
+        if line_colors:
+            for key, color in line_colors.items():
+                self._apply_line_color(key, color)
 
     @staticmethod
     def _build_palette(background: str, text: str, card: str) -> QPalette:

@@ -179,14 +179,20 @@ class SensorWidget(QFrame):
         self.color = color
         self.curve.setPen(pg.mkPen(color=color, width=2))
 
-    def apply_theme(self, text_color: str):
-        """Keep the plot's axes, tick labels, axis titles, and grid lines
-        readable against the current app theme.
+    def apply_theme(self, text_color: str, card_color: str = None):
+        """Keep the plot's background, axes, tick labels, axis titles, and
+        grid lines matching the current app theme.
 
-        pyqtgraph draws these itself (they are not QSS/stylesheet driven),
-        so switching the app's Light/Dark theme has no effect on them
-        unless we explicitly re-color them here.
+        pyqtgraph draws all of this itself (none of it is QSS/stylesheet
+        driven), so switching the app's theme has no visual effect on the
+        plot area unless we explicitly re-color it here. Previously only
+        the axis text was updated and the plot background was left
+        transparent, which meant the graph's actual canvas didn't follow
+        the card color and looked mismatched against dark themes - this
+        now paints the plot background to match the card exactly.
         """
+        if card_color:
+            self.plot_widget.setBackground(card_color)
         for axis_name in ("left", "bottom"):
             axis = self.plot_widget.getAxis(axis_name)
             axis.setPen(text_color)

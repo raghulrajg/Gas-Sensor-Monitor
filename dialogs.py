@@ -2,12 +2,26 @@
 dialogs.py
 ----------
 Small QDialogs used under the View menu to customize appearance:
-  * LineColorDialog   - change each channel's plot line color
-  * ThemeDialog        - change the overall application background/text color
+  * LineColorDialog   - change each channel's plot line color (with a
+                         per-row Reset and a Reset-All-to-Default)
+  * ThemeDialog        - pick from a list of editor-style color schemes
+                         (Light/Dark/Monokai/Dracula/Nord/...), or build a
+                         fully custom background/text/card combination
   * LayoutDialog        - change graph grid column count and reorder channels
+
+Note on signal connections: every slot below takes exactly the arguments
+its signal provides (with a safe default for the rest), rather than a bare
+lambda with a required leading parameter. That pattern is what caused the
+"missing 1 required positional argument" crash previously - Qt's
+signal/slot dispatch does not always forward the same number of arguments
+in every context (e.g. `clicked()` vs `clicked(bool)`), so slots here are
+written to tolerate being called with zero or one argument.
 """
 
-from PySide6.QtCore import Qt
+from functools import partial
+
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -15,9 +29,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QListWidget,
+    QListWidgetItem,
     QAbstractItemView,
     QSpinBox,
     QColorDialog,
+    QCheckBox,
     QDialogButtonBox,
     QFrame,
 )
@@ -25,18 +41,25 @@ from PySide6.QtWidgets import (
 import config
 
 
-class ColorSwatch(QFrame):
-    """A small clickable colored square."""
+def _swatch_icon(color: str, size: int = 16) -> QIcon:
+    pix = QPixmap(size, size)
+    pix.fill(QColor(color))
+    return QIcon(pix)
+
+
+class ColorSwatchButton(QPushButton):
+    """A small clickable colored square, used as a per-row color picker."""
 
     def __init__(self, color: str, parent=None):
         super().__init__(parent)
-        self.setFixedSize(28, 20)
+        self.setFixedSize(30, 22)
         self.set_color(color)
-        self.setFrameShape(QFrame.Box)
 
     def set_color(self, color: str):
         self.color = color
-        self.setStyleSheet(f"background-color: {color}; border: 1px solid #888;")
+        self.setStyleSheet(
+            f"background-color: {color}; border: 1px solid #888; border-radius: 3px;"
+        )
 
 
 class LineColorDialog(QDialog):
@@ -46,6 +69,7 @@ class LineColorDialog(QDialog):
     def __init__(self, channel_colors: dict, on_color_changed, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Graph Line Colors")
+        self.setMinimumWidth(320)
         self._channel_colors = dict(channel_colors)
         self._on_color_changed = on_color_changed
         self._swatches = {}
@@ -57,91 +81,137 @@ class LineColorDialog(QDialog):
             row = QHBoxLayout()
             row.addWidget(QLabel(ch["name"]))
             row.addStretch()
-            swatch = ColorSwatch(self._channel_colors.get(ch["key"], ch["color"]))
-            swatch.mousePressEvent = self._make_swatch_handler(ch["key"], swatch)
+
+            swatch = ColorSwatchButton(self._channel_colors.get(ch["key"], ch["color"]))
+            swatch.clicked.connect(partial(self._pick_color, ch["key"], swatch))
             self._swatches[ch["key"]] = swatch
             row.addWidget(swatch)
+
+            reset_btn = QPushButton("Reset")
+            reset_btn.setToolTip("Reset this graph to its default color")
+            reset_btn.clicked.connect(partial(self._reset_one, ch["key"]))
+            row.addWidget(reset_btn)
+
             layout.addLayout(row)
+
+        reset_all_btn = QPushButton("Reset All to Default")
+        reset_all_btn.clicked.connect(self._reset_all)
+        layout.addWidget(reset_all_btn)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.accept)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
-    def _make_swatch_handler(self, key, swatch):
-        def handler(event):
-            current = self._channel_colors.get(key, "#1f77b4")
-            color = QColorDialog.getColor(current, self, f"Pick color")
-            if color.isValid():
-                hex_color = color.name()
-                self._channel_colors[key] = hex_color
-                swatch.set_color(hex_color)
-                self._on_color_changed(key, hex_color)
+    def _pick_color(self, key: str, swatch: ColorSwatchButton, checked: bool = False):
+        current = self._channel_colors.get(key, "#1f77b4")
+        color = QColorDialog.getColor(QColor(current), self, "Pick color")
+        if color.isValid():
+            self._set_channel_color(key, color.name(), swatch)
 
-        return handler
+    def _reset_one(self, key: str, checked: bool = False):
+        default_color = config.DEFAULT_LINE_COLORS.get(key)
+        if default_color:
+            self._set_channel_color(key, default_color, self._swatches[key])
+
+    def _reset_all(self, checked: bool = False):
+        for key, swatch in self._swatches.items():
+            default_color = config.DEFAULT_LINE_COLORS.get(key)
+            if default_color:
+                self._set_channel_color(key, default_color, swatch)
+
+    def _set_channel_color(self, key: str, hex_color: str, swatch: ColorSwatchButton):
+        self._channel_colors[key] = hex_color
+        swatch.set_color(hex_color)
+        self._on_color_changed(key, hex_color)
 
 
 class ThemeDialog(QDialog):
-    """Lets the user pick an application-wide background/text theme, either
-    from presets or a custom color pick. Applies immediately via
-    `on_theme_changed(background_hex, text_hex, card_hex)`."""
+    """Editor-style theme picker: choose from a list of named color
+    schemes (each with a matching set of default line colors), or build a
+    fully custom background/text/card combination. Applies immediately via
+    `on_theme_changed(background_hex, text_hex, card_hex, line_colors=None)`.
+    `line_colors`, when provided, is a dict of {channel_key: hex} the
+    caller may apply alongside the theme.
+    """
 
     def __init__(self, current_theme: dict, on_theme_changed, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Application Theme")
+        self.setMinimumWidth(340)
         self._on_theme_changed = on_theme_changed
         self._theme = dict(current_theme)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Presets:"))
+        layout.addWidget(QLabel("Color scheme:"))
 
-        preset_row = QHBoxLayout()
+        self.preset_list = QListWidget()
+        self.preset_list.setIconSize(QSize(16, 16))
         for name, values in config.THEME_PRESETS.items():
-            btn = QPushButton(name)
-            btn.clicked.connect(lambda _, v=values: self._apply(v))
-            preset_row.addWidget(btn)
-        layout.addLayout(preset_row)
+            item = QListWidgetItem(_swatch_icon(values["background"]), name)
+            self.preset_list.addItem(item)
+        self.preset_list.itemClicked.connect(self._on_preset_clicked)
+        layout.addWidget(self.preset_list)
+
+        self.apply_line_colors_checkbox = QCheckBox("Also apply this scheme's default line colors")
+        self.apply_line_colors_checkbox.setChecked(True)
+        layout.addWidget(self.apply_line_colors_checkbox)
 
         layout.addWidget(QLabel("Custom:"))
         custom_row = QHBoxLayout()
 
-        bg_btn = QPushButton("Background Color...")
+        bg_btn = QPushButton("Background...")
         bg_btn.clicked.connect(self._pick_background)
         custom_row.addWidget(bg_btn)
 
-        text_btn = QPushButton("Text Color...")
+        text_btn = QPushButton("Text...")
         text_btn.clicked.connect(self._pick_text)
         custom_row.addWidget(text_btn)
 
-        card_btn = QPushButton("Card Color...")
+        card_btn = QPushButton("Card...")
         card_btn.clicked.connect(self._pick_card)
         custom_row.addWidget(card_btn)
 
         layout.addLayout(custom_row)
 
+        reset_btn = QPushButton(f"Reset to App Default ({config.DEFAULT_THEME})")
+        reset_btn.clicked.connect(self._reset_to_default)
+        layout.addWidget(reset_btn)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.accept)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
-    def _apply(self, values):
+    def _on_preset_clicked(self, item: QListWidgetItem):
+        values = config.THEME_PRESETS[item.text()]
         self._theme.update(values)
-        self._on_theme_changed(self._theme["background"], self._theme["text"], self._theme["card"])
+        line_colors = values.get("line_colors") if self.apply_line_colors_checkbox.isChecked() else None
+        line_colors_dict = None
+        if line_colors:
+            line_colors_dict = {ch["key"]: c for ch, c in zip(config.CHANNELS, line_colors)}
+        self._on_theme_changed(self._theme["background"], self._theme["text"], self._theme["card"], line_colors_dict)
 
-    def _pick_background(self):
-        color = QColorDialog.getColor(self._theme.get("background", "#ffffff"), self, "Background Color")
+    def _reset_to_default(self, checked: bool = False):
+        values = config.THEME_PRESETS[config.DEFAULT_THEME]
+        self._theme.update(values)
+        line_colors_dict = {ch["key"]: c for ch, c in zip(config.CHANNELS, values["line_colors"])}
+        self._on_theme_changed(self._theme["background"], self._theme["text"], self._theme["card"], line_colors_dict)
+
+    def _pick_background(self, checked: bool = False):
+        color = QColorDialog.getColor(QColor(self._theme.get("background", "#ffffff")), self, "Background Color")
         if color.isValid():
             self._theme["background"] = color.name()
             self._on_theme_changed(self._theme["background"], self._theme["text"], self._theme["card"])
 
-    def _pick_text(self):
-        color = QColorDialog.getColor(self._theme.get("text", "#000000"), self, "Text Color")
+    def _pick_text(self, checked: bool = False):
+        color = QColorDialog.getColor(QColor(self._theme.get("text", "#000000")), self, "Text Color")
         if color.isValid():
             self._theme["text"] = color.name()
             self._on_theme_changed(self._theme["background"], self._theme["text"], self._theme["card"])
 
-    def _pick_card(self):
-        color = QColorDialog.getColor(self._theme.get("card", "#ffffff"), self, "Card Color")
+    def _pick_card(self, checked: bool = False):
+        color = QColorDialog.getColor(QColor(self._theme.get("card", "#ffffff")), self, "Card Color")
         if color.isValid():
             self._theme["card"] = color.name()
             self._on_theme_changed(self._theme["background"], self._theme["text"], self._theme["card"])
