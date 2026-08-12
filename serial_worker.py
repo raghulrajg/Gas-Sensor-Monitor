@@ -101,10 +101,10 @@ class SerialWorker(QThread):
                     values.append(float("nan"))
             # pad / trim to expected sensor count so a malformed line
             # never crashes the UI update
-            if len(values) < config.NUM_SENSORS:
-                values.extend([float("nan")] * (config.NUM_SENSORS - len(values)))
-            elif len(values) > config.NUM_SENSORS:
-                values = values[: config.NUM_SENSORS]
+            if len(values) < config.NUM_CHANNELS:
+                values.extend([float("nan")] * (config.NUM_CHANNELS - len(values)))
+            elif len(values) > config.NUM_CHANNELS:
+                values = values[: config.NUM_CHANNELS]
             self.data_received.emit(values)
             return
 

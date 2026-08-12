@@ -1,8 +1,9 @@
 """
 data_recorder.py
 -----------------
-Handles "Record" -> "Stop -> Export to Excel" for the raw incoming gas
-data stream.
+Handles "Record" -> "Stop -> Export to Excel" for the raw incoming sensor
+data stream, plus standalone settings export/import so a calibration
+profile can be reused across multiple sessions.
 
 Design note: this is intentionally decoupled from the live-plot ring
 buffers (see sensor_widget.py). The graphs only ever keep the last
@@ -15,7 +16,7 @@ balloon RAM usage or slow the UI down.
 
 import datetime as _dt
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
 import config
@@ -44,9 +45,9 @@ class DataRecorder:
     def start(self):
         """Begin a new recording session (in-memory, streamed on write)."""
         self._wb = Workbook(write_only=True)
-        self._ws = self._wb.create_sheet(title="Gas Data")
+        self._ws = self._wb.create_sheet(title="Sensor Data")
         header = ["Timestamp", "Elapsed (s)"] + [
-            f"{name} ({config.SENSOR_UNITS})" for name in config.SENSOR_NAMES
+            f"{ch['name']} ({ch['unit']})" for ch in config.CHANNELS
         ]
         self._ws.append(header)
         self._sample_count = 0
@@ -54,7 +55,7 @@ class DataRecorder:
         self._recording = True
 
     def write_sample(self, values):
-        """Append one sample row. `values` is a list of NUM_SENSORS floats."""
+        """Append one sample row. `values` is a list of NUM_CHANNELS floats."""
         if not self._recording or self._ws is None:
             return
         now = _dt.datetime.now()
@@ -100,14 +101,15 @@ class DataRecorder:
             ws2.append(["COM Port", port_info.get("port", "")])
             ws2.append(["Baud Rate", port_info.get("baudrate", "")])
         ws2.append([])
-        ws2.append(["Sensor", f"Calibration Value ({config.SENSOR_UNITS})"])
-        for name, val in zip(config.SENSOR_NAMES, calibration_values):
-            ws2.append([name, val])
+        ws2.append(["Sensor", f"Calibration Value"])
+        gas_channels = [c for c in config.CHANNELS if c["calibration"]]
+        for ch, val in zip(gas_channels, calibration_values):
+            ws2.append([ch["name"], val])
 
 
 def export_settings_only(filepath: str, calibration_values, port_info=None):
     """Standalone export of just the current calibration/settings (no
-    recorded data), used by the "Export Settings" button.
+    recorded data), used by the "Export Settings" menu action.
     """
     wb = Workbook()
     ws = wb.active
@@ -121,13 +123,56 @@ def export_settings_only(filepath: str, calibration_values, port_info=None):
         ws.append(["COM Port", port_info.get("port", "")])
         ws.append(["Baud Rate", port_info.get("baudrate", "")])
     ws.append([])
-    ws.append(["Sensor", f"Calibration Value ({config.SENSOR_UNITS})"])
+    ws.append(["Sensor", "Calibration Value"])
     ws["A6"].font = bold
     ws["B6"].font = bold
-    for name, val in zip(config.SENSOR_NAMES, calibration_values):
-        ws.append([name, val])
+    gas_channels = [c for c in config.CHANNELS if c["calibration"]]
+    for ch, val in zip(gas_channels, calibration_values):
+        ws.append([ch["name"], val])
 
     if not filepath.lower().endswith(".xlsx"):
         filepath += ".xlsx"
     wb.save(filepath)
     return filepath
+
+
+def import_settings(filepath: str) -> dict:
+    """Read a previously exported settings file (either from
+    `export_settings_only` or the "Settings Snapshot" sheet written
+    alongside a recording) and return {sensor_name: calibration_value}.
+
+    Tolerant of either sheet name ("Settings" or "Settings Snapshot") and
+    simply scans for the "Sensor" / "Calibration Value" header row, then
+    reads name/value pairs until it hits a blank row.
+    """
+    wb = load_workbook(filepath, data_only=True)
+
+    candidate_sheets = [s for s in wb.sheetnames if "Settings" in s] or wb.sheetnames
+    for sheet_name in candidate_sheets:
+        ws = wb[sheet_name]
+        rows = list(ws.iter_rows(values_only=True))
+        header_row_idx = None
+        for i, row in enumerate(rows):
+            if row and row[0] == "Sensor":
+                header_row_idx = i
+                break
+        if header_row_idx is None:
+            continue
+
+        result = {}
+        for row in rows[header_row_idx + 1:]:
+            if not row or row[0] in (None, ""):
+                break
+            name = row[0]
+            try:
+                value = float(row[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            result[name] = value
+        if result:
+            return result
+
+    raise ValueError(
+        "Couldn't find a calibration settings table in this file. "
+        "Expected a sheet with a 'Sensor' / 'Calibration Value' header row."
+    )
