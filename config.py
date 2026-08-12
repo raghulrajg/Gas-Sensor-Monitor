@@ -35,13 +35,13 @@ REQUEST_SETTINGS_CMD = "R:SETTINGS\n"
 # color is the default plot line color (hex); user can change this at
 # runtime from the View > Line Colors menu.
 CHANNELS = [
-    {"key": "gas1", "name": "Sensor 1", "unit": "ppm", "calibration": True, "gas_index": 1, "color": "#1f77b4"},
-    {"key": "gas2", "name": "Sensor 2", "unit": "ppm", "calibration": True, "gas_index": 2, "color": "#ff7f0e"},
-    {"key": "gas3", "name": "Sensor 3", "unit": "ppm", "calibration": True, "gas_index": 3, "color": "#2ca02c"},
-    {"key": "gas4", "name": "Sensor 4", "unit": "ppm", "calibration": True, "gas_index": 4, "color": "#d62728"},
-    {"key": "gas5", "name": "Sensor 5", "unit": "ppm", "calibration": True, "gas_index": 5, "color": "#9467bd"},
-    {"key": "gas6", "name": "Sensor 6", "unit": "ppm", "calibration": True, "gas_index": 6, "color": "#8c564b"},
-    {"key": "gas7", "name": "Sensor 7", "unit": "ppm", "calibration": True, "gas_index": 7, "color": "#e377c2"},
+    {"key": "gas1", "name": "TGS 825", "unit": "ppm", "calibration": True, "gas_index": 1, "color": "#1f77b4"},
+    {"key": "gas2", "name": "TGS 2602", "unit": "ppm", "calibration": True, "gas_index": 2, "color": "#ff7f0e"},
+    {"key": "gas3", "name": "MQ 137", "unit": "ppm", "calibration": True, "gas_index": 3, "color": "#2ca02c"},
+    {"key": "gas4", "name": "TGS 1820", "unit": "ppm", "calibration": True, "gas_index": 4, "color": "#d62728"},
+    {"key": "gas5", "name": "MQ 138", "unit": "ppm", "calibration": True, "gas_index": 5, "color": "#9467bd"},
+    {"key": "gas6", "name": "WSP 2110", "unit": "ppm", "calibration": True, "gas_index": 6, "color": "#8c564b"},
+    {"key": "gas7", "name": "MQ 3", "unit": "ppm", "calibration": True, "gas_index": 7, "color": "#e377c2"},
     {"key": "temp", "name": "Temperature", "unit": "\u00b0C", "calibration": False, "gas_index": None, "color": "#17becf"},
     {"key": "humidity", "name": "Humidity", "unit": "%RH", "calibration": False, "gas_index": None, "color": "#bcbd22"},
 ]
