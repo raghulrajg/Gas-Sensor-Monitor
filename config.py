@@ -79,7 +79,7 @@ DEFAULT_GRID_COLUMNS = 3
 # Theme defaults (changeable at runtime via View > Application Theme)
 # ---------------------------------------------------------------------------
 THEME_PRESETS = {
-    "Light": {"background": "#f5f6fa", "text": "#2c3e50", "card": "#ffffff"},
-    "Dark": {"background": "#1e1e2e", "text": "#e0e0e0", "card": "#2b2b3c"},
+    "Light": {"background": "#f5f6fa", "text": "#2c3e50", "card": "#ffffff", "border": "#d0d3d9"},
+    "Dark": {"background": "#1e1e2e", "text": "#e0e0e0", "card": "#2b2b3c", "border": "#44445a"},
 }
 DEFAULT_THEME = "Light"

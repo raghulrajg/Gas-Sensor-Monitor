@@ -10,8 +10,9 @@ import time
 import datetime as _dt
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QGridLayout,
@@ -73,6 +74,12 @@ class MainWindow(QMainWindow):
         export_action = QAction("Export Current Settings...", self)
         export_action.triggered.connect(self._on_export_settings_clicked)
         file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+
+        request_settings_action = QAction("Request Settings from Device", self)
+        request_settings_action.triggered.connect(self._on_request_settings_clicked)
+        file_menu.addAction(request_settings_action)
 
         file_menu.addSeparator()
 
@@ -211,12 +218,23 @@ class MainWindow(QMainWindow):
         self.worker.data_received.connect(self._on_data_received)
         self.worker.status_changed.connect(self.statusBar().showMessage)
         self.worker.settings_line_received.connect(self._on_settings_line_received)
+        self.worker.connection_failed.connect(self._on_connection_failed)
         self.worker.start()
 
         self.connected = True
         self._session_start = time.time()
         self.connect_btn.setText("Disconnect")
         self._set_connection_controls_enabled(False)
+
+    def _on_connection_failed(self, message: str):
+        # The serial port never actually opened - revert the optimistic
+        # "Connected" UI state we set in _connect() instead of leaving the
+        # app stuck showing "Disconnect" while nothing is connected.
+        self.worker = None
+        self.connected = False
+        self.connect_btn.setText("Connect")
+        self._set_connection_controls_enabled(True)
+        QMessageBox.critical(self, "Connection Failed", message)
 
     def _disconnect(self):
         if self.worker is not None:
@@ -298,9 +316,6 @@ class MainWindow(QMainWindow):
             "Excel Files (*.xlsx)",
         )
 
-        self.record_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-
         if not filepath:
             reply = QMessageBox.question(
                 self,
@@ -311,7 +326,12 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.Yes:
                 self.recorder.discard()
                 self.record_status_label.setText("Not recording")
+                self.record_btn.setEnabled(True)
+                self.stop_btn.setEnabled(False)
             else:
+                # Still recording - keep Record disabled / Stop enabled so
+                # the buttons reflect reality instead of both looking clickable.
+                self.record_btn.setEnabled(False)
                 self.stop_btn.setEnabled(True)
                 self._elapsed_timer.start(1000)
             return
@@ -319,6 +339,8 @@ class MainWindow(QMainWindow):
         calibration_values = self._current_calibration_values()
         port_info = self._current_port_info()
         saved_path, count = self.recorder.stop_and_save(filepath, calibration_values, port_info)
+        self.record_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.record_status_label.setText(f"Saved {count} samples to {saved_path}")
         QMessageBox.information(self, "Export Complete", f"Saved {count} samples to:\n{saved_path}")
 
@@ -377,6 +399,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 5000)
         QMessageBox.information(self, "Import Complete", msg)
 
+    def _on_request_settings_clicked(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not Connected", "Connect to a device before requesting settings.")
+            return
+        ok = self.worker.send_raw(config.REQUEST_SETTINGS_CMD)
+        msg = "Requested current settings from device" if ok else "Failed to request settings (not connected)"
+        self.statusBar().showMessage(msg, 3000)
+
     def _current_port_info(self):
         return {
             "port": self.port_combo.currentData() or "",
@@ -399,14 +429,69 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _apply_theme(self, background: str, text: str, card: str):
-        self.theme = {"background": background, "text": text, "card": card}
-        self.setStyleSheet(
-            f"""
-            QMainWindow, QWidget {{ background-color: {background}; color: {text}; }}
-            QFrame#sensorCard {{ background-color: {card}; border-radius: 6px; border: 1px solid rgba(0,0,0,0.15); }}
-            QScrollArea {{ background-color: {background}; border: none; }}
-            """
+        # Look up a matching border color from the presets when this exact
+        # combination came from a preset; otherwise derive a neutral one
+        # from the card color so custom themes still get a visible divider.
+        border = next(
+            (p["border"] for p in config.THEME_PRESETS.values()
+             if p["background"] == background and p["text"] == text and p["card"] == card),
+            self.theme.get("border", config.THEME_PRESETS[config.DEFAULT_THEME]["border"]),
         )
+        self.theme = {"background": background, "text": text, "card": card, "border": border}
+
+        # Applied at the QApplication level (not just this window) so that
+        # top-level dialogs (Line Colors / Application Theme / Graph Layout)
+        # inherit the same theme instead of staying stuck on the OS default.
+        stylesheet = f"""
+            QMainWindow, QWidget {{ background-color: {background}; color: {text}; }}
+            QDialog {{ background-color: {background}; color: {text}; }}
+            QFrame#sensorCard {{ background-color: {card}; border-radius: 6px; border: 1px solid {border}; }}
+            QScrollArea {{ background-color: {background}; border: none; }}
+            QPushButton {{ background-color: {card}; color: {text}; border: 1px solid {border}; border-radius: 4px; padding: 4px 10px; }}
+            QPushButton:hover {{ border: 1px solid {text}; }}
+            QPushButton:disabled {{ color: {border}; }}
+            QComboBox, QSpinBox, QDoubleSpinBox, QListWidget {{
+                background-color: {card}; color: {text}; border: 1px solid {border}; border-radius: 4px;
+            }}
+            QListWidget::item:selected {{ background-color: {border}; }}
+            QMenuBar, QMenu {{ background-color: {card}; color: {text}; }}
+            QMenu::item:selected {{ background-color: {border}; }}
+            QStatusBar {{ background-color: {background}; color: {text}; }}
+            QSlider::groove:horizontal {{ background-color: {border}; height: 4px; border-radius: 2px; }}
+            QSlider::handle:horizontal {{ background-color: {text}; width: 12px; margin: -5px 0; border-radius: 6px; }}
+        """
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(self._build_palette(background, text, card))
+            app.setStyleSheet(stylesheet)
+        else:
+            self.setStyleSheet(stylesheet)
+
+        # pyqtgraph draws its own axes/labels/grid (not QSS-driven), so it
+        # needs to be re-colored explicitly on every theme change.
+        for sw in getattr(self, "sensor_widgets", {}).values():
+            sw.apply_theme(text)
+
+    @staticmethod
+    def _build_palette(background: str, text: str, card: str) -> QPalette:
+        """Real QPalette to back the stylesheet, so anything Qt paints
+        natively (native color/file dialogs, message boxes, tooltips,
+        disabled-state fallbacks) also follows the theme instead of
+        silently staying on the OS default when QSS doesn't reach it."""
+        pal = QPalette()
+        bg, tx, cd = QColor(background), QColor(text), QColor(card)
+        pal.setColor(QPalette.Window, bg)
+        pal.setColor(QPalette.WindowText, tx)
+        pal.setColor(QPalette.Base, cd)
+        pal.setColor(QPalette.AlternateBase, bg)
+        pal.setColor(QPalette.Text, tx)
+        pal.setColor(QPalette.Button, cd)
+        pal.setColor(QPalette.ButtonText, tx)
+        pal.setColor(QPalette.ToolTipBase, cd)
+        pal.setColor(QPalette.ToolTipText, tx)
+        pal.setColor(QPalette.Highlight, QColor("#3d7ebf"))
+        pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        return pal
 
     def _on_layout_clicked(self):
         dlg = LayoutDialog(self.layout_order, self.layout_columns, self._apply_layout, self)
@@ -429,5 +514,8 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
+        for sw in self.sensor_widgets.values():
+            if sw._popout_window is not None:
+                sw._popout_window.close()
         self._disconnect()
         event.accept()

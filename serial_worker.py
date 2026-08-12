@@ -27,6 +27,10 @@ class SerialWorker(QThread):
     data_received = Signal(list)
     # Emits a human readable status / error string.
     status_changed = Signal(str)
+    # Emitted specifically when the initial port open fails, so the caller
+    # can distinguish "never actually connected" from a mid-session hiccup
+    # and revert any optimistic "Connected" UI state.
+    connection_failed = Signal(str)
     # Emitted with (index_1_based, value) when the device confirms/reports
     # a calibration value (used when importing current settings from device).
     settings_line_received = Signal(int, float)
@@ -54,7 +58,9 @@ class SerialWorker(QThread):
                 write_timeout=config.SERIAL_WRITE_TIMEOUT,
             )
         except Exception as exc:  # noqa: BLE001
-            self.status_changed.emit(f"Failed to open {self.port_name}: {exc}")
+            msg = f"Failed to open {self.port_name}: {exc}"
+            self.status_changed.emit(msg)
+            self.connection_failed.emit(msg)
             return
 
         self._running = True

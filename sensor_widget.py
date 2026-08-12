@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (
     QSlider,
     QDoubleSpinBox,
     QFrame,
+    QPushButton,
 )
 
 import config
+from graph_window import GraphPopoutWindow
 
 
 class SensorWidget(QFrame):
@@ -50,6 +52,10 @@ class SensorWidget(QFrame):
         self._x_buffer = deque(maxlen=config.PLOT_BUFFER_SIZE)
         self._y_buffer = deque(maxlen=config.PLOT_BUFFER_SIZE)
 
+        self._popout_window = None
+        self._popout_placeholder = None
+        self._plot_layout_index = None
+
         self._build_ui()
 
         # Debounce timer: only fire calibration_changed after the user
@@ -67,9 +73,14 @@ class SensorWidget(QFrame):
         title = QLabel(f"<b>{self.name}</b>")
         self.value_label = QLabel(f"-- {self.unit}")
         self.value_label.setAlignment(Qt.AlignRight)
+        self.popout_btn = QPushButton("\u2922")  # expand-diagonal glyph
+        self.popout_btn.setFixedWidth(28)
+        self.popout_btn.setToolTip("Open this graph in its own window")
+        self.popout_btn.clicked.connect(self._toggle_popout)
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self.value_label)
+        header.addWidget(self.popout_btn)
         layout.addLayout(header)
 
         self.plot_widget = pg.PlotWidget()
@@ -79,6 +90,7 @@ class SensorWidget(QFrame):
         self.plot_widget.setLabel("bottom", "Time (s)")
         self.plot_widget.setMinimumHeight(150)
         self.curve = self.plot_widget.plot(pen=pg.mkPen(color=self.color, width=2))
+        self._plot_layout_index = layout.count()
         layout.addWidget(self.plot_widget)
 
         if self.has_calibration:
@@ -166,3 +178,56 @@ class SensorWidget(QFrame):
     def set_line_color(self, color: str):
         self.color = color
         self.curve.setPen(pg.mkPen(color=color, width=2))
+
+    def apply_theme(self, text_color: str):
+        """Keep the plot's axes, tick labels, axis titles, and grid lines
+        readable against the current app theme.
+
+        pyqtgraph draws these itself (they are not QSS/stylesheet driven),
+        so switching the app's Light/Dark theme has no effect on them
+        unless we explicitly re-color them here.
+        """
+        for axis_name in ("left", "bottom"):
+            axis = self.plot_widget.getAxis(axis_name)
+            axis.setPen(text_color)
+            axis.setTextPen(text_color)
+        self.plot_widget.setLabel("left", self.unit, color=text_color)
+        self.plot_widget.setLabel("bottom", "Time (s)", color=text_color)
+
+    # ------------------------------------------------------------------
+    # Pop out this graph into its own (optionally full-screen) window
+    # ------------------------------------------------------------------
+    def _toggle_popout(self):
+        if self._popout_window is None:
+            self._open_popout()
+        else:
+            # This triggers closeEvent -> _on_popout_closed, which docks
+            # the graph back into the card.
+            self._popout_window.close()
+
+    def _open_popout(self):
+        # Move the live plot widget itself into the pop-out window (rather
+        # than building a second plot) so it keeps updating in real time
+        # and never drifts out of sync with the docked view.
+        self.plot_widget.setParent(None)
+
+        self._popout_placeholder = QLabel(f"{self.name} graph is open in a separate window")
+        self._popout_placeholder.setAlignment(Qt.AlignCenter)
+        self._popout_placeholder.setMinimumHeight(150)
+        self.layout().insertWidget(self._plot_layout_index, self._popout_placeholder)
+
+        self._popout_window = GraphPopoutWindow(self.name, self.plot_widget, self)
+        self._popout_window.closed.connect(self._on_popout_closed)
+        self.popout_btn.setText("\u2921")  # collapse-diagonal glyph
+        self.popout_btn.setToolTip("Close the separate window and dock the graph back")
+        self._popout_window.show()
+
+    def _on_popout_closed(self):
+        self.plot_widget.setParent(None)
+        self.layout().removeWidget(self._popout_placeholder)
+        self._popout_placeholder.deleteLater()
+        self._popout_placeholder = None
+        self.layout().insertWidget(self._plot_layout_index, self.plot_widget)
+        self._popout_window = None
+        self.popout_btn.setText("\u2922")
+        self.popout_btn.setToolTip("Open this graph in its own window")

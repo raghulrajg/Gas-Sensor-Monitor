@@ -18,6 +18,13 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Gas Sensor Monitor")
 
+    # Force the Fusion style: the native platform styles (windowsvista,
+    # macOS, etc.) largely IGNORE custom QSS colors on standard controls
+    # (buttons, combo boxes, menus, sliders...), so only plain widget
+    # backgrounds would change and the Light/Dark theme switch looked
+    # broken. Fusion fully respects stylesheets/palette on every widget.
+    app.setStyle("Fusion")
+
     window = MainWindow()
     window.show()
 
